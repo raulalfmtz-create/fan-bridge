@@ -29,6 +29,7 @@ public class MainActivity extends Activity {
     public static final String KEY_APP_KEY = "sinric_app_key";
     public static final String KEY_APP_SECRET = "sinric_app_secret";
     public static final String KEY_SINRIC_STATUS = "sinric_status";
+    public static final String KEY_BRIDGE_ENABLED = "bridge_enabled";
 
     private static final int REQ_PERMS = 1001;
 
@@ -36,6 +37,8 @@ public class MainActivity extends Activity {
     private TextView status;
     private Button onButton;
     private Button offButton;
+    private Button enableBridgeButton;
+    private Button stopBridgeButton;
     private EditText deviceIdInput;
     private EditText appKeyInput;
     private EditText appSecretInput;
@@ -53,9 +56,12 @@ public class MainActivity extends Activity {
         updateReadyState();
 
         onButton.setOnClickListener(v ->
-                sendToBridge(FanBridgeService.ACTION_ON, "Orden local enviada · velocidad 3"));
+                sendLocalCommand(FanBridgeService.ACTION_ON, "Orden local enviada · velocidad 3"));
         offButton.setOnClickListener(v ->
-                sendToBridge(FanBridgeService.ACTION_OFF, "Orden local enviada · apagar"));
+                sendLocalCommand(FanBridgeService.ACTION_OFF, "Orden local enviada · apagar"));
+
+        enableBridgeButton.setOnClickListener(v -> enableBridge());
+        stopBridgeButton.setOnClickListener(v -> stopBridge());
     }
 
     private void buildUi() {
@@ -78,7 +84,7 @@ public class MainActivity extends Activity {
         root.addView(title, fullWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("v0.3 · Sinric Pro → Flip 4 → BLE");
+        subtitle.setText("v0.5 · modo seguro");
         subtitle.setTextSize(16);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setGravity(Gravity.CENTER);
@@ -92,12 +98,39 @@ public class MainActivity extends Activity {
         status.setPadding(dp(12), dp(12), dp(12), dp(12));
         root.addView(status, fullWrap());
 
+        TextView safetyTitle = new TextView(this);
+        safetyTitle.setText("Seguridad");
+        safetyTitle.setTextSize(20);
+        safetyTitle.setTextColor(Color.rgb(63, 48, 38));
+        LinearLayout.LayoutParams safetyTitleLp = fullWrap();
+        safetyTitleLp.setMargins(0, dp(18), 0, dp(8));
+        root.addView(safetyTitle, safetyTitleLp);
+
+        TextView safetyInfo = new TextView(this);
+        safetyInfo.setText("El puente inicia detenido después de instalar v0.5. Cada orden manda un solo pulso BLE corto. Si llegan demasiadas órdenes, Fan Bridge se desconecta solo.");
+        safetyInfo.setTextSize(14);
+        safetyInfo.setTextColor(Color.DKGRAY);
+        safetyInfo.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams safetyInfoLp = fullWrap();
+        safetyInfoLp.setMargins(0, 0, 0, gap);
+        root.addView(safetyInfo, safetyInfoLp);
+
+        enableBridgeButton = makeButton("ACTIVAR PUENTE");
+        root.addView(enableBridgeButton, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58)));
+
+        stopBridgeButton = makeButton("DETENER PUENTE");
+        LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+        stopLp.setMargins(0, gap, 0, dp(24));
+        root.addView(stopBridgeButton, stopLp);
+
         TextView section = new TextView(this);
         section.setText("Sinric Pro");
         section.setTextSize(20);
         section.setTextColor(Color.rgb(63, 48, 38));
         LinearLayout.LayoutParams sectionLp = fullWrap();
-        sectionLp.setMargins(0, dp(18), 0, dp(8));
+        sectionLp.setMargins(0, dp(8), 0, dp(8));
         root.addView(section, sectionLp);
 
         deviceIdInput = makeInput("Device ID (24 caracteres)");
@@ -110,8 +143,8 @@ public class MainActivity extends Activity {
         appSecretInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         root.addView(appSecretInput, fullWrapWithBottom(gap));
 
-        Button save = makeButton("GUARDAR Y CONECTAR");
-        save.setOnClickListener(v -> saveAndConnect());
+        Button save = makeButton("GUARDAR CREDENCIALES");
+        save.setOnClickListener(v -> saveCredentials());
         root.addView(save, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(58)));
 
@@ -143,7 +176,7 @@ public class MainActivity extends Activity {
         root.addView(offButton, offLp);
 
         TextView note = new TextView(this);
-        note.setText("Después de guardar, revisa la notificación de Fan Bridge. Debe indicar “Sinric Pro conectado”.");
+        note.setText("Si notas pitidos repetidos, toca DETENER PUENTE. La conexión con Sinric se corta y Fan Bridge deja de transmitir por BLE.");
         note.setTextSize(14);
         note.setTextColor(Color.GRAY);
         note.setGravity(Gravity.CENTER);
@@ -192,7 +225,7 @@ public class MainActivity extends Activity {
         appSecretInput.setText(p.getString(KEY_APP_SECRET, ""));
     }
 
-    private void saveAndConnect() {
+    private void saveCredentials() {
         String deviceId = deviceIdInput.getText().toString().trim();
         String appKey = appKeyInput.getText().toString().trim();
         String appSecret = appSecretInput.getText().toString().trim();
@@ -210,13 +243,52 @@ public class MainActivity extends Activity {
             return;
         }
 
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        p.edit()
                 .putString(KEY_DEVICE_ID, deviceId)
                 .putString(KEY_APP_KEY, appKey)
                 .putString(KEY_APP_SECRET, appSecret)
                 .apply();
 
-        sendToBridge(FanBridgeService.ACTION_RECONNECT, "Credenciales guardadas · conectando a Sinric Pro");
+        if (p.getBoolean(KEY_BRIDGE_ENABLED, false)) {
+            sendServiceAction(FanBridgeService.ACTION_RECONNECT);
+            setStatus("Credenciales guardadas · reconectando a Sinric Pro", false);
+        } else {
+            setStatus("Credenciales guardadas · puente detenido", false);
+        }
+    }
+
+    private void enableBridge() {
+        if (!hasBtPermissions()) {
+            requestPermissionsIfNeeded();
+            return;
+        }
+
+        try {
+            if (adapter == null || !adapter.isEnabled()) {
+                setStatus("Activa Bluetooth antes de activar el puente.", true);
+                return;
+            }
+        } catch (SecurityException e) {
+            setStatus("Falta permiso de Bluetooth.", true);
+            return;
+        }
+
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit().putBoolean(KEY_BRIDGE_ENABLED, true).apply();
+
+        sendServiceAction(FanBridgeService.ACTION_ENABLE_BRIDGE);
+        setStatus("Puente activado · conectando a Sinric Pro", false);
+        updateBridgeButtons(true);
+    }
+
+    private void stopBridge() {
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit().putBoolean(KEY_BRIDGE_ENABLED, false).apply();
+
+        sendServiceAction(FanBridgeService.ACTION_STOP_BRIDGE);
+        setStatus("Puente detenido · sin transmisión BLE", false);
+        updateBridgeButtons(false);
     }
 
     private void requestPermissionsIfNeeded() {
@@ -250,60 +322,71 @@ public class MainActivity extends Activity {
     private void updateReadyState() {
         if (adapter == null) {
             setStatus("Este teléfono no tiene Bluetooth disponible.", true);
-            setButtons(false);
+            updateBridgeButtons(false);
             return;
         }
+
         if (!hasBtPermissions()) {
             setStatus("Da permiso de dispositivos cercanos/Bluetooth.", true);
-            setButtons(false);
+            updateBridgeButtons(false);
             return;
         }
 
         try {
             if (!adapter.isEnabled()) {
                 setStatus("Activa Bluetooth para continuar.", true);
-                setButtons(false);
+                updateBridgeButtons(false);
                 return;
             }
         } catch (SecurityException e) {
             setStatus("Falta permiso de Bluetooth.", true);
-            setButtons(false);
+            updateBridgeButtons(false);
             return;
         }
 
         startBridgeService();
 
         SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String sinricStatus = p.getString(KEY_SINRIC_STATUS, "");
-        if (sinricStatus.isEmpty()) {
-            setStatus("Bluetooth listo · configura Sinric Pro", false);
+        boolean enabled = p.getBoolean(KEY_BRIDGE_ENABLED, false);
+
+        if (!enabled) {
+            setStatus("Modo seguro · puente detenido", false);
         } else {
-            setStatus("Bluetooth listo · " + sinricStatus, false);
+            String sinricStatus = p.getString(KEY_SINRIC_STATUS, "");
+            setStatus(sinricStatus.isEmpty()
+                    ? "Puente activo · conectando a Sinric Pro"
+                    : "Puente activo · " + sinricStatus, false);
         }
-        setButtons(true);
+
+        updateBridgeButtons(enabled);
+    }
+
+    private void updateBridgeButtons(boolean enabled) {
+        if (onButton != null) onButton.setEnabled(enabled);
+        if (offButton != null) offButton.setEnabled(enabled);
+        if (enableBridgeButton != null) enableBridgeButton.setEnabled(!enabled);
+        if (stopBridgeButton != null) stopBridgeButton.setEnabled(enabled);
     }
 
     private void startBridgeService() {
-        Intent intent = new Intent(this, FanBridgeService.class).setAction(FanBridgeService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
-        else startService(intent);
+        sendServiceAction(FanBridgeService.ACTION_START);
     }
 
-    private void sendToBridge(String action, String message) {
-        if (!hasBtPermissions()) {
-            requestPermissionsIfNeeded();
+    private void sendLocalCommand(String action, String message) {
+        if (!getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(KEY_BRIDGE_ENABLED, false)) {
+            setStatus("El puente está detenido. Actívalo primero.", true);
             return;
         }
 
-        Intent intent = new Intent(this, FanBridgeService.class).setAction(action);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
-        else startService(intent);
+        sendServiceAction(action);
         setStatus(message + " ✓", false);
     }
 
-    private void setButtons(boolean enabled) {
-        if (onButton != null) onButton.setEnabled(enabled);
-        if (offButton != null) offButton.setEnabled(enabled);
+    private void sendServiceAction(String action) {
+        Intent intent = new Intent(this, FanBridgeService.class).setAction(action);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent);
+        else startService(intent);
     }
 
     private void setStatus(String text, boolean error) {
