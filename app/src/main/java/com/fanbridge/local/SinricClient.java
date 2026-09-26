@@ -9,6 +9,8 @@ import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.concurrent.TimeUnit;
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -36,6 +38,7 @@ public class SinricClient {
     private String appSecret = "";
     private boolean connected = false;
     private boolean manualDisconnect = false;
+    private final Set<String> processedReplyTokens = new HashSet<>();
 
     public SinricClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -70,7 +73,7 @@ public class SinricClient {
                 .addHeader("appkey", appKey)
                 .addHeader("deviceids", deviceId)
                 .addHeader("platform", "Android")
-                .addHeader("SDKVersion", "FanBridge-0.3")
+                .addHeader("SDKVersion", "FanBridge-0.4")
                 .addHeader("mac", "android-" + androidId)
                 .build();
 
@@ -141,6 +144,20 @@ public class SinricClient {
                 if (!on && !off) {
                     sendResponse(webSocket, payload, false, new JSONObject(), "Estado no válido");
                     return;
+                }
+
+                String replyToken = payload.optString("replyToken", "");
+
+                if (!replyToken.isEmpty() && processedReplyTokens.contains(replyToken)) {
+                    JSONObject responseValue = new JSONObject();
+                    responseValue.put("state", on ? "On" : "Off");
+                    sendResponse(webSocket, payload, true, responseValue, "OK");
+                    return;
+                }
+
+                if (!replyToken.isEmpty()) {
+                    if (processedReplyTokens.size() > 100) processedReplyTokens.clear();
+                    processedReplyTokens.add(replyToken);
                 }
 
                 boolean success = listener.onPowerState(on);
