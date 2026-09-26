@@ -8,7 +8,7 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeUnit;\nimport java.util.LinkedHashMap;\nimport java.util.Iterator;\nimport java.util.Map;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -35,7 +35,7 @@ public class SinricClient {
     private String appKey = "";
     private String appSecret = "";
     private boolean connected = false;
-    private boolean manualDisconnect = false;
+    private boolean manualDisconnect = false;\n    private final LinkedHashMap<String, Long> processedReplyTokens = new LinkedHashMap<>();\n    private static final long REPLY_TOKEN_TTL_MS = 60000L;
 
     public SinricClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -70,7 +70,7 @@ public class SinricClient {
                 .addHeader("appkey", appKey)
                 .addHeader("deviceids", deviceId)
                 .addHeader("platform", "Android")
-                .addHeader("SDKVersion", "FanBridge-0.3")
+                .addHeader("SDKVersion", "FanBridge-0.4")
                 .addHeader("mac", "android-" + androidId)
                 .build();
 
@@ -143,6 +143,19 @@ public class SinricClient {
                     return;
                 }
 
+                String replyToken = payload.optString("replyToken", "");
+
+                // A resent Sinric request must receive a response, but must not
+                // trigger another BLE transmission.
+                if (isDuplicateReplyToken(replyToken)) {
+                    JSONObject responseValue = new JSONObject();
+                    responseValue.put("state", on ? "On" : "Off");
+                    sendResponse(webSocket, payload, true, responseValue, "OK");
+                    return;
+                }
+
+                rememberReplyToken(replyToken);
+
                 boolean success = listener.onPowerState(on);
                 JSONObject responseValue = new JSONObject();
                 if (success) responseValue.put("state", on ? "On" : "Off");
@@ -154,6 +167,36 @@ public class SinricClient {
             }
         } catch (Exception e) {
             listener.onSinricStatus("Sinric Pro: mensaje no válido", false);
+        }
+    }
+
+    private synchronized boolean isDuplicateReplyToken(String token) {
+        if (token == null || token.isEmpty()) return false;
+        pruneReplyTokens();
+        return processedReplyTokens.containsKey(token);
+    }
+
+    private synchronized void rememberReplyToken(String token) {
+        if (token == null || token.isEmpty()) return;
+        pruneReplyTokens();
+        processedReplyTokens.put(token, System.currentTimeMillis());
+
+        while (processedReplyTokens.size() > 50) {
+            Iterator<String> it = processedReplyTokens.keySet().iterator();
+            if (it.hasNext()) {
+                it.next();
+                it.remove();
+            } else {
+                break;
+            }
+        }
+    }
+
+    private synchronized void pruneReplyTokens() {
+        long cutoff = System.currentTimeMillis() - REPLY_TOKEN_TTL_MS;
+        Iterator<Map.Entry<String, Long>> it = processedReplyTokens.entrySet().iterator();
+        while (it.hasNext()) {
+            if (it.next().getValue() < cutoff) it.remove();
         }
     }
 
