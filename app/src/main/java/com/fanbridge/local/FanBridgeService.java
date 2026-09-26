@@ -34,7 +34,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
 
     private static final String CHANNEL_ID = "fan_bridge_channel";
     private static final int NOTIFICATION_ID = 71;
-    private static final long ADVERTISE_MS = 900;
+    private static final long ADVERTISE_MS = 250;
 
     private static final int[] FAN_ON_SPEED_3 = {
             0x08F0, 0x8220, 0x3936, 0x5FFD, 0x39C7, 0x6DF9, 0x641B,
