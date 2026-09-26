@@ -21,6 +21,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.ParcelUuid;
+import android.os.SystemClock;
 
 import java.util.Locale;
 import java.util.UUID;
@@ -35,6 +36,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
     private static final String CHANNEL_ID = "fan_bridge_channel";
     private static final int NOTIFICATION_ID = 71;
     private static final long ADVERTISE_MS = 250;
+    private static final long CLOUD_COMMAND_COOLDOWN_MS = 5000;
 
     private static final int[] FAN_ON_SPEED_3 = {
             0x08F0, 0x8220, 0x3936, 0x5FFD, 0x39C7, 0x6DF9, 0x641B,
@@ -51,6 +53,8 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
     private AdvertiseCallback activeCallback;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SinricClient sinricClient;
+    private Boolean lastCloudPowerState = null;
+    private long lastCloudCommandAt = 0L;
 
     @Override
     public void onCreate() {
@@ -171,7 +175,19 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
     }
 
     @Override
-    public boolean onPowerState(boolean on) {
+    public synchronized boolean onPowerState(boolean on) {
+        long now = SystemClock.elapsedRealtime();
+
+        if (lastCloudPowerState != null
+                && lastCloudPowerState == on
+                && (now - lastCloudCommandAt) < CLOUD_COMMAND_COOLDOWN_MS) {
+            updateNotification("Comando repetido de Alexa ignorado ✓ · " + sinricClient.getShortStatus());
+            return true;
+        }
+
+        lastCloudPowerState = on;
+        lastCloudCommandAt = now;
+
         return on
                 ? transmit(FAN_ON_SPEED_3, "Alexa/Sinric: ventilador encendido")
                 : transmit(FAN_OFF, "Alexa/Sinric: ventilador apagado");
