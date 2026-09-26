@@ -56,6 +56,7 @@ public class SinricClient {
         }
 
         disconnect();
+        processedReplyTokens.clear();
 
         this.deviceId = deviceId;
         this.appKey = appKey;
@@ -73,7 +74,7 @@ public class SinricClient {
                 .addHeader("appkey", appKey)
                 .addHeader("deviceids", deviceId)
                 .addHeader("platform", "Android")
-                .addHeader("SDKVersion", "FanBridge-0.4")
+                .addHeader("SDKVersion", "FanBridge-0.5")
                 .addHeader("mac", "android-" + androidId)
                 .build();
 
