@@ -1,3 +1,4 @@
+# Stable signing workflow
 name: Build Signed Fan Bridge APK
 
 on:
