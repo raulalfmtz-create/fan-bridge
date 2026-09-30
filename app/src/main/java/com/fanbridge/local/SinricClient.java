@@ -74,7 +74,7 @@ public class SinricClient {
                 .addHeader("appkey", appKey)
                 .addHeader("deviceids", deviceId)
                 .addHeader("platform", "Android")
-                .addHeader("SDKVersion", "FanBridge-0.5")
+                .addHeader("SDKVersion", "FanBridge-0.6")
                 .addHeader("mac", "android-" + androidId)
                 .build();
 
