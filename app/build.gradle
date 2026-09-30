@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseKeystorePath = System.getenv("FANBRIDGE_KEYSTORE_PATH")
+def releaseKeystorePassword = System.getenv("FANBRIDGE_KEYSTORE_PASSWORD")
+def releaseKeyAlias = System.getenv("FANBRIDGE_KEY_ALIAS")
+def releaseKeyPassword = System.getenv("FANBRIDGE_KEY_PASSWORD")
+
 android {
     namespace 'com.fanbridge.local'
     compileSdk 35
@@ -10,8 +15,26 @@ android {
         applicationId 'com.fanbridge.local'
         minSdk 23
         targetSdk 35
-        versionCode 5
-        versionName '0.5'
+        versionCode 6
+        versionName '0.6'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseKeystorePath && releaseKeystorePassword && releaseKeyAlias && releaseKeyPassword) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
     }
 }
 
