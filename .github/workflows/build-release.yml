@@ -1,0 +1,83 @@
+name: Build Signed Fan Bridge APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      FANBRIDGE_KEYSTORE_BASE64: ${{ secrets.FANBRIDGE_KEYSTORE_BASE64 }}
+      FANBRIDGE_KEYSTORE_PASSWORD: ${{ secrets.FANBRIDGE_KEYSTORE_PASSWORD }}
+      FANBRIDGE_KEY_ALIAS: ${{ secrets.FANBRIDGE_KEY_ALIAS }}
+      FANBRIDGE_KEY_PASSWORD: ${{ secrets.FANBRIDGE_KEY_PASSWORD }}
+
+    steps:
+      - name: Check signing secrets
+        id: signing
+        shell: bash
+        run: |
+          if [ -z "$FANBRIDGE_KEYSTORE_BASE64" ] || \
+             [ -z "$FANBRIDGE_KEYSTORE_PASSWORD" ] || \
+             [ -z "$FANBRIDGE_KEY_ALIAS" ] || \
+             [ -z "$FANBRIDGE_KEY_PASSWORD" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signed build skipped because signing secrets are not configured yet."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 35
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        if: steps.signing.outputs.ready == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Restore release keystore
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          echo "$FANBRIDGE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/fanbridge-release.jks"
+          chmod 600 "$RUNNER_TEMP/fanbridge-release.jks"
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          FANBRIDGE_KEYSTORE_PATH: ${{ runner.temp }}/fanbridge-release.jks
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Verify APK signature
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        run: |
+          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload signed APK
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FanBridge-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
