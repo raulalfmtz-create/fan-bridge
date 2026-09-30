@@ -84,7 +84,7 @@ public class MainActivity extends Activity {
         root.addView(title, fullWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("v0.5 · modo seguro");
+        subtitle.setText("v0.6 · modo seguro · firma estable");
         subtitle.setTextSize(16);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setGravity(Gravity.CENTER);
