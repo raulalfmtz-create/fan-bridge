@@ -127,6 +127,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
                 .edit().putBoolean(PREF_BRIDGE_ENABLED, true).apply();
 
         resetCloudSafety();
+        MainActivity.appendEvent(this, "Puente activado manualmente");
         updateNotification("Puente activado · conectando a Sinric Pro…");
         connectSinric(true);
     }
@@ -138,6 +139,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
         resetCloudSafety();
         stopCurrentAdvert();
         sinricClient.disconnect();
+        MainActivity.appendEvent(this, reason);
         setSinricStatus(reason + " · sin transmisión BLE");
     }
 
@@ -146,6 +148,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
                 .edit().putBoolean(PREF_BRIDGE_ENABLED, false).apply();
 
         stopCurrentAdvert();
+        MainActivity.appendEvent(this, "PROTECCIÓN: demasiados comandos en 10 s · puente detenido");
         setSinricStatus("PROTECCIÓN ACTIVADA · demasiados comandos · puente detenido");
 
         // Give Sinric a moment to receive the failure response, then cut the cloud link.
@@ -240,6 +243,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
                 handler.postDelayed(() -> {
                     if (activeCallback == this) {
                         stopCurrentAdvert();
+                        MainActivity.appendEvent(FanBridgeService.this, "BLE enviado · " + doneText);
                         updateNotification(doneText + " ✓ · " + sinricClient.getShortStatus());
                     }
                 }, ADVERTISE_MS);
@@ -249,6 +253,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
             public void onStartFailure(int errorCode) {
                 if (activeCallback == this) activeCallback = null;
                 bleBusy = false;
+                MainActivity.appendEvent(FanBridgeService.this, "Error BLE · código " + errorCode);
                 updateNotification("Error BLE · código " + errorCode);
             }
         };
@@ -271,6 +276,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
     public synchronized boolean onPowerState(boolean on) {
         if (!isBridgeEnabled()) return false;
 
+        MainActivity.appendEvent(this, "Alexa/Sinric: " + (on ? "ON" : "OFF") + " recibido");
         long now = SystemClock.elapsedRealtime();
 
         // Count every cloud command, even ones we later ignore.
@@ -288,6 +294,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
         // Ignore any immediate follow-up command so only one BLE burst can occur.
         if (lastCloudCommandAt > 0
                 && (now - lastCloudCommandAt) < CLOUD_COMMAND_COOLDOWN_MS) {
+            MainActivity.appendEvent(this, "Comando rápido ignorado por protección");
             updateNotification("Comando rápido de Alexa ignorado ✓ · protección activa");
             return true;
         }
@@ -296,6 +303,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
         if (lastCloudPowerState != null
                 && lastCloudPowerState == on
                 && (now - lastCloudCommandAt) < SAME_STATE_COOLDOWN_MS) {
+            MainActivity.appendEvent(this, "Comando repetido ignorado por protección");
             updateNotification("Comando repetido de Alexa ignorado ✓");
             return true;
         }
@@ -316,6 +324,7 @@ public class FanBridgeService extends Service implements SinricClient.Listener {
     private void setSinricStatus(String text) {
         getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE)
                 .edit().putString(MainActivity.KEY_SINRIC_STATUS, text).apply();
+        MainActivity.appendEvent(this, text);
         updateNotification(text);
     }
 
