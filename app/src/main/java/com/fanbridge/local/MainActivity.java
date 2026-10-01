@@ -19,8 +19,11 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
 
@@ -30,6 +33,8 @@ public class MainActivity extends Activity {
     public static final String KEY_APP_SECRET = "sinric_app_secret";
     public static final String KEY_SINRIC_STATUS = "sinric_status";
     public static final String KEY_BRIDGE_ENABLED = "bridge_enabled";
+    public static final String KEY_EVENT_HISTORY = "event_history";
+    private static final int MAX_HISTORY_LINES = 80;
 
     private static final int REQ_PERMS = 1001;
 
@@ -42,6 +47,7 @@ public class MainActivity extends Activity {
     private EditText deviceIdInput;
     private EditText appKeyInput;
     private EditText appSecretInput;
+    private TextView historyText;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,7 +90,7 @@ public class MainActivity extends Activity {
         root.addView(title, fullWrap());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("v0.6 · modo seguro · firma estable");
+        subtitle.setText("v0.7 · reconexión automática · historial");
         subtitle.setTextSize(16);
         subtitle.setTextColor(Color.DKGRAY);
         subtitle.setGravity(Gravity.CENTER);
@@ -181,9 +187,46 @@ public class MainActivity extends Activity {
         note.setTextColor(Color.GRAY);
         note.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams noteLp = fullWrap();
-        noteLp.setMargins(0, dp(24), 0, 0);
+        noteLp.setMargins(0, dp(24), 0, dp(24));
         root.addView(note, noteLp);
 
+        TextView historyTitle = new TextView(this);
+        historyTitle.setText("Historial");
+        historyTitle.setTextSize(20);
+        historyTitle.setTextColor(Color.rgb(63, 48, 38));
+        root.addView(historyTitle, fullWrapWithBottom(dp(8)));
+
+        TextView historyInfo = new TextView(this);
+        historyInfo.setText("Guarda conexiones, reconexiones, órdenes de Alexa y activaciones de protección.");
+        historyInfo.setTextSize(13);
+        historyInfo.setTextColor(Color.GRAY);
+        LinearLayout.LayoutParams historyInfoLp = fullWrap();
+        historyInfoLp.setMargins(0, 0, 0, dp(10));
+        root.addView(historyInfo, historyInfoLp);
+
+        historyText = new TextView(this);
+        historyText.setTextSize(13);
+        historyText.setTextColor(Color.DKGRAY);
+        historyText.setPadding(dp(10), dp(10), dp(10), dp(10));
+        root.addView(historyText, fullWrapWithBottom(dp(10)));
+
+        Button refreshHistory = makeButton("ACTUALIZAR HISTORIAL");
+        refreshHistory.setOnClickListener(v -> updateHistoryView());
+        root.addView(refreshHistory, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
+
+        Button clearHistory = makeButton("BORRAR HISTORIAL");
+        clearHistory.setOnClickListener(v -> {
+            clearEventHistory(this);
+            appendEvent(this, "Historial borrado manualmente");
+            updateHistoryView();
+        });
+        LinearLayout.LayoutParams clearHistoryLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+        clearHistoryLp.setMargins(0, gap, 0, 0);
+        root.addView(clearHistory, clearHistoryLp);
+
+        updateHistoryView();
         setContentView(scroll);
     }
 
@@ -396,6 +439,45 @@ public class MainActivity extends Activity {
         });
     }
 
+    public static synchronized void appendEvent(Context context, String event) {
+        if (context == null || event == null || event.trim().isEmpty()) return;
+
+        String clean = event.replace("\n", " ").replace("\r", " ").trim();
+        String stamp = new SimpleDateFormat("dd/MM HH:mm:ss", Locale.getDefault())
+                .format(new Date());
+        String newLine = stamp + "  " + clean;
+
+        SharedPreferences p = context.getSharedPreferences(PREFS, MODE_PRIVATE);
+        String old = p.getString(KEY_EVENT_HISTORY, "");
+        String combined = old.isEmpty() ? newLine : old + "\n" + newLine;
+        String[] lines = combined.split("\n");
+
+        int start = Math.max(0, lines.length - MAX_HISTORY_LINES);
+        StringBuilder trimmed = new StringBuilder();
+        for (int i = start; i < lines.length; i++) {
+            if (trimmed.length() > 0) trimmed.append("\n");
+            trimmed.append(lines[i]);
+        }
+
+        p.edit().putString(KEY_EVENT_HISTORY, trimmed.toString()).apply();
+    }
+
+    public static synchronized String getEventHistory(Context context) {
+        return context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(KEY_EVENT_HISTORY, "");
+    }
+
+    public static synchronized void clearEventHistory(Context context) {
+        context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit().remove(KEY_EVENT_HISTORY).apply();
+    }
+
+    private void updateHistoryView() {
+        if (historyText == null) return;
+        String history = getEventHistory(this);
+        historyText.setText(history.isEmpty() ? "Sin eventos todavía." : history);
+    }
+
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
@@ -410,5 +492,6 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateReadyState();
+        updateHistoryView();
     }
 }
