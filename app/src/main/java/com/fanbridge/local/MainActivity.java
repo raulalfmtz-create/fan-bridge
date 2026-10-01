@@ -113,7 +113,7 @@ public class MainActivity extends Activity {
         root.addView(safetyTitle, safetyTitleLp);
 
         TextView safetyInfo = new TextView(this);
-        safetyInfo.setText("El puente inicia detenido después de instalar v0.5. Cada orden manda un solo pulso BLE corto. Si llegan demasiadas órdenes, Fan Bridge se desconecta solo.");
+        safetyInfo.setText("Cada orden manda un solo pulso BLE corto. Si llegan demasiadas órdenes, Fan Bridge se desconecta solo. Si la conexión normal con Sinric se cae, intenta reconectar automáticamente.");
         safetyInfo.setTextSize(14);
         safetyInfo.setTextColor(Color.DKGRAY);
         safetyInfo.setGravity(Gravity.CENTER);
