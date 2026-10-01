@@ -1,6 +1,8 @@
 package com.fanbridge.local;
 
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Base64;
 
@@ -8,9 +10,9 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.concurrent.TimeUnit;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -28,16 +30,27 @@ public class SinricClient {
         void onSinricStatus(String text, boolean connected);
     }
 
+    private static final long[] RECONNECT_DELAYS_MS = {
+            5000L, 15000L, 30000L, 60000L
+    };
+
     private final Context context;
     private final Listener listener;
     private final OkHttpClient httpClient;
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     private WebSocket socket;
     private String deviceId = "";
     private String appKey = "";
     private String appSecret = "";
+
     private boolean connected = false;
-    private boolean manualDisconnect = false;
+    private boolean connecting = false;
+    private boolean shouldReconnect = false;
+    private boolean reconnectScheduled = false;
+    private int reconnectAttempt = 0;
+    private int generation = 0;
+
     private final Set<String> processedReplyTokens = new HashSet<>();
 
     public SinricClient(Context context, Listener listener) {
@@ -50,20 +63,36 @@ public class SinricClient {
     }
 
     public synchronized void connect(String deviceId, String appKey, String appSecret) {
-        if (connected && this.deviceId.equals(deviceId)
-                && this.appKey.equals(appKey) && this.appSecret.equals(appSecret)) {
+        boolean sameCredentials = this.deviceId.equals(deviceId)
+                && this.appKey.equals(appKey)
+                && this.appSecret.equals(appSecret);
+
+        if (sameCredentials && shouldReconnect
+                && (connected || connecting || reconnectScheduled)) {
             return;
         }
 
-        disconnect();
+        stopSocket(false);
         processedReplyTokens.clear();
 
         this.deviceId = deviceId;
         this.appKey = appKey;
         this.appSecret = appSecret;
-        this.manualDisconnect = false;
+        this.shouldReconnect = true;
+        this.reconnectAttempt = 0;
 
         listener.onSinricStatus("Sinric Pro conectando…", false);
+        openSocket();
+    }
+
+    private synchronized void openSocket() {
+        if (!shouldReconnect || connecting || connected) return;
+        if (deviceId.isEmpty() || appKey.isEmpty() || appSecret.isEmpty()) return;
+
+        reconnectScheduled = false;
+        connecting = true;
+
+        final int myGeneration = ++generation;
 
         String androidId = Settings.Secure.getString(
                 context.getContentResolver(), Settings.Secure.ANDROID_ID);
@@ -74,53 +103,113 @@ public class SinricClient {
                 .addHeader("appkey", appKey)
                 .addHeader("deviceids", deviceId)
                 .addHeader("platform", "Android")
-                .addHeader("SDKVersion", "FanBridge-0.6")
+                .addHeader("SDKVersion", "FanBridge-0.7")
                 .addHeader("mac", "android-" + androidId)
                 .build();
 
         socket = httpClient.newWebSocket(request, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
-                connected = true;
+                synchronized (SinricClient.this) {
+                    if (myGeneration != generation || !shouldReconnect) {
+                        webSocket.close(1000, "stale connection");
+                        return;
+                    }
+                    connected = true;
+                    connecting = false;
+                    reconnectScheduled = false;
+                    reconnectAttempt = 0;
+                }
                 listener.onSinricStatus("Sinric Pro conectado ✓", true);
             }
 
             @Override
             public void onMessage(WebSocket webSocket, String text) {
+                synchronized (SinricClient.this) {
+                    if (myGeneration != generation || !connected) return;
+                }
                 handleMessage(webSocket, text);
             }
 
             @Override
             public void onClosing(WebSocket webSocket, int code, String reason) {
-                connected = false;
                 webSocket.close(code, reason);
-                listener.onSinricStatus("Sinric Pro desconectando…", false);
             }
 
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
-                connected = false;
-                if (!manualDisconnect) {
-                    listener.onSinricStatus("Sinric Pro desconectado · reabre Fan Bridge para reconectar", false);
+                synchronized (SinricClient.this) {
+                    if (myGeneration != generation) return;
+                    connected = false;
+                    connecting = false;
+                    socket = null;
+                }
+
+                if (shouldReconnect) {
+                    String detail = reason == null || reason.trim().isEmpty()
+                            ? "conexión cerrada"
+                            : reason.trim();
+                    scheduleReconnect(detail);
                 }
             }
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                connected = false;
-                if (!manualDisconnect) {
-                    String msg = t.getMessage() == null ? "error de conexión" : t.getMessage();
-                    listener.onSinricStatus("Sinric Pro: " + msg, false);
+                synchronized (SinricClient.this) {
+                    if (myGeneration != generation) return;
+                    connected = false;
+                    connecting = false;
+                    socket = null;
+                }
+
+                if (shouldReconnect) {
+                    String detail = t.getMessage() == null
+                            ? "error de conexión"
+                            : t.getMessage();
+                    scheduleReconnect(detail);
                 }
             }
         });
+    }
+
+    private synchronized void scheduleReconnect(String reason) {
+        if (!shouldReconnect || reconnectScheduled) return;
+
+        long delay = RECONNECT_DELAYS_MS[
+                Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+        reconnectAttempt++;
+        reconnectScheduled = true;
+
+        long seconds = delay / 1000L;
+        listener.onSinricStatus(
+                "Sinric Pro desconectado · reintento en " + seconds + " s · " + sanitizeReason(reason),
+                false);
+
+        final int expectedGeneration = generation;
+        handler.postDelayed(() -> {
+            synchronized (SinricClient.this) {
+                if (!shouldReconnect || expectedGeneration != generation) {
+                    reconnectScheduled = false;
+                    return;
+                }
+                reconnectScheduled = false;
+            }
+            listener.onSinricStatus("Sinric Pro reconectando…", false);
+            openSocket();
+        }, delay);
+    }
+
+    private String sanitizeReason(String reason) {
+        if (reason == null) return "sin detalle";
+        String clean = reason.replace("\n", " ").replace("\r", " ").trim();
+        if (clean.length() > 70) clean = clean.substring(0, 70);
+        return clean.isEmpty() ? "sin detalle" : clean;
     }
 
     private void handleMessage(WebSocket webSocket, String raw) {
         try {
             JSONObject root = new JSONObject(raw);
 
-            // Sinric puede enviar un mensaje de timestamp que no lleva payload.
             if (root.has("timestamp") && !root.has("payload")) return;
             if (!root.has("payload") || !root.has("signature")) return;
 
@@ -236,15 +325,28 @@ public class SinricClient {
     }
 
     public synchronized void disconnect() {
-        manualDisconnect = true;
+        stopSocket(true);
+    }
+
+    private synchronized void stopSocket(boolean manualStop) {
+        shouldReconnect = !manualStop;
+        reconnectScheduled = false;
         connected = false;
+        connecting = false;
+        reconnectAttempt = 0;
+
+        generation++;
+        handler.removeCallbacksAndMessages(null);
+
         if (socket != null) {
-            socket.close(1000, "Fan Bridge reconnect");
+            socket.cancel();
             socket = null;
         }
     }
 
-    public String getShortStatus() {
-        return connected ? "Sinric conectado" : "Sinric sin conexión";
+    public synchronized String getShortStatus() {
+        if (connected) return "Sinric conectado";
+        if (connecting || reconnectScheduled) return "Sinric reconectando";
+        return "Sinric sin conexión";
     }
 }
